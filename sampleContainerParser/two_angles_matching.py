@@ -352,7 +352,7 @@ def main(model, sample_in_operation_model):
     image_90deg = capture_image("./work/90deg_image.jpg")
     boxes_90deg = get_bounding_boxes(model, sample_in_operation_model, image_90deg)
     print("number of detections at 90 degrees", len(boxes_90deg))
-    image_90deg_detections = image_0deg.copy()
+    image_90deg_detections = image_90deg.copy()
     draw_boxes(image_90deg_detections, boxes_90deg)
     cv2.imwrite("./work/90deg_image_detections.jpg", image_90deg_detections)
 
