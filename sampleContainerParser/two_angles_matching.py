@@ -256,7 +256,7 @@ def find_base_centroid(location, centroids):
     return base_centroid_index
 
 def get_based_centroids(centroids, base_index, container_angle):
-    num_rotations = int(base_index - container_angle / 9) # +1 because indexing starts from 0
+    num_rotations = int(base_index - container_angle / 9)
     return np.concatenate([centroids[num_rotations:], centroids[:num_rotations]])
 
 def combine_results(labels1, labels2):
@@ -314,6 +314,8 @@ def draw_sample_container(labels):
     angle_step = 360.0 / num_sample_holders
     start_angle = 117
 
+    print("num labels: ", len(labels))
+    print(labels)
     for i in range(num_sample_holders):
         angle = np.deg2rad(start_angle + i * angle_step)
         x = int(center[0] + radius * np.cos(angle))
@@ -336,57 +338,56 @@ def clean_working_dir():
     else:
         os.mkdir(working_dir)
 
-def main(model, sample_in_operation_model):
-    ACQUIRE_PV.put(1)
-    move_to_position(0) # move the sample stage to position 0
+def get_labels(angle, model, sample_in_operation_model):
+    move_to_position(angle)
+    image = capture_image(f"./work/image_{angle}deg.jpg")
+    boxes = get_bounding_boxes(model, sample_in_operation_model, image)
+    num_detections = len(boxes)
+    print(f"number of detections at {angle} degree", num_detections)
+    image_detections = image.copy()
+    draw_boxes(image_detections, boxes)
+    cv2.imwrite(f"./work/image_{angle}deg_detections.jpg", image_detections)
 
-    image_0deg = capture_image("./work/reference_image.jpg")
-    boxes_0deg = get_bounding_boxes(model, sample_in_operation_model, image_0deg)
-    print("number of detections at 0 degree", len(boxes_0deg))
-    image_0deg_detections = image_0deg.copy()
-    draw_boxes(image_0deg_detections, boxes_0deg)
-    cv2.imwrite("./work/reference_image_detections.jpg", image_0deg_detections)
-    reference_position = SAMPLE_CONTAINER_POS_PV.get()
-
-    move_to_position(90)
-    image_90deg = capture_image("./work/90deg_image.jpg")
-    boxes_90deg = get_bounding_boxes(model, sample_in_operation_model, image_90deg)
-    print("number of detections at 90 degrees", len(boxes_90deg))
-    image_90deg_detections = image_90deg.copy()
-    draw_boxes(image_90deg_detections, boxes_90deg)
-    cv2.imwrite("./work/90deg_image_detections.jpg", image_90deg_detections)
-
-    no_sample_width, no_sample_hight = get_no_sample_dimensions(boxes_0deg)
-    centroids_0deg = get_holders_centroids(boxes_0deg, no_sample_width, no_sample_hight)
-    centroids_90deg = get_holders_centroids(boxes_90deg, no_sample_width, no_sample_hight)
-    
-    sorted_centroids_0deg = sort_centroids(np.array(centroids_0deg), image_0deg)
-    sorted_centroids_90deg = sort_centroids(np.array(centroids_90deg), image_90deg)
+    no_sample_width, no_sample_hight = get_no_sample_dimensions(boxes)
+    centroids = get_holders_centroids(boxes, no_sample_width, no_sample_hight)
+    sorted_centroids = sort_centroids(np.array(centroids), image)
 
     # Expected location for sample in operation location
     expected_sample_in_operation_location = (1116, 1293)
-    cv2.circle(image_0deg, expected_sample_in_operation_location, radius=2, color=BLUE_COLOR, thickness=-1)
-    cv2.circle(image_90deg, expected_sample_in_operation_location, radius=2, color=BLUE_COLOR, thickness=-1)
-
-    base_centroid_index_0deg = find_base_centroid(expected_sample_in_operation_location, sorted_centroids_0deg[:, :2].astype(float))
-    base_centroid_index_90deg = find_base_centroid(expected_sample_in_operation_location, sorted_centroids_90deg[:, :2].astype(float))
-
-    based_centroids_0deg = get_based_centroids(sorted_centroids_0deg, base_centroid_index_0deg, 0)
-    based_centroids_90deg = get_based_centroids(sorted_centroids_90deg, base_centroid_index_90deg, 90)
-
-    labels_0deg = based_centroids_0deg[:, 2]
-    labels_90deg = based_centroids_90deg[:, 2]
-
-    print(labels_0deg)
-    print(labels_90deg)
-    labels = combine_results(labels_0deg, labels_90deg)
-    draw_sample_container(labels)
-    print("num labels: ", len(labels))
+    cv2.circle(image, expected_sample_in_operation_location, radius=2, color=BLUE_COLOR, thickness=-1)
+    base_centroid_index = find_base_centroid(expected_sample_in_operation_location, sorted_centroids[:, :2].astype(float))
+    based_centroids = get_based_centroids(sorted_centroids, base_centroid_index, angle)
+    draw_ind_text(image, based_centroids)
+    labels = based_centroids[:, 2]
     print(labels)
+    return labels
 
-    draw_ind_text(image_0deg, based_centroids_0deg)
-    draw_ind_text(image_90deg, based_centroids_90deg)
+def main(model, sample_in_operation_model):
+    ACQUIRE_PV.put(1)
+    move_to_position(0)
+    reference_position = SAMPLE_CONTAINER_POS_PV.get()
 
+    labels = get_labels(0, model, sample_in_operation_model)
+    num_detections = len(labels)
+    if num_detections == 40:
+        draw_sample_container(labels)
+        return
+
+    angles = [90, 45]
+    for angle in angles:
+        other_labels = get_labels(angle, model, sample_in_operation_model)
+        num_detections = len(other_labels)
+        if num_detections == 40:
+            labels = other_labels
+        else:
+            labels = combine_results(labels, other_labels)
+        num_detections = len(labels)
+        print(num_detections)
+        if num_detections == 40:
+            break
+
+    if num_detections == 40:
+        draw_sample_container(labels)
     move_to_position(reference_position)
 
 if __name__ == '__main__':
