@@ -5,7 +5,6 @@ import random
 import cv2
 import numpy as np
 from time import sleep
-from scipy.spatial.distance import cdist
 from ultralytics import YOLO
 from epics import PV
 
@@ -152,28 +151,7 @@ def draw_ind_text(image, centroids):
             txt_color = RED_COLOR
         cv2.putText(image, text, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 1.5, txt_color, 2, cv2.LINE_AA)
 
-def add_missing_boxes(boxes_0deg, centroids_0deg, centroids_90deg, no_sample_width, no_sample_hight):
-    dist_matrix = cdist(centroids_90deg, centroids_0deg)  # shape: (len(centroids_90deg), len(centroids_0deg))
-    min_indices = np.array(np.argmin(dist_matrix, axis=1))
-    min_dist = dist_matrix.min(axis=1)
-    print(min_dist)#np.where(min_dist > 15))
-    missing_indices = np.where(min_dist > 15)[0]
-    missing_centroids = [centroids_90deg[i] for i in missing_indices]
-    for centroid in missing_centroids:
-        cx, cy = centroid
-        x1 = cx - no_sample_width / 2
-        x2 = cx + no_sample_width / 2
-        y1 = cy - no_sample_hight / 2
-        y2 = cy + no_sample_hight / 2
-        boxes_0deg.append({
-                           "class_id": "0",
-                           "label": "no-sample",
-                           "confidence": 0.8,
-                           "bbox": [x1, y1, x2, y2]
-                          })
-    return boxes_0deg
-
-def ransac_ellipse(points, image, iterations=200, threshold=0.2, min_inliers_ratio=0.97):
+def ransac_ellipse(points, iterations=200, threshold=0.2, min_inliers_ratio=0.97):
     best_ellipse = None
     max_inliers = 0
 
@@ -214,9 +192,9 @@ def ransac_ellipse(points, image, iterations=200, threshold=0.2, min_inliers_rat
     print("Best Ellipse Found")
     return best_ellipse
 
-def sort_centroids(centroids, image):
+def sort_centroids(centroids):
     centroids_wo_labels = np.array(centroids[:, :2], dtype=np.float32)
-    ellipse = ransac_ellipse(centroids_wo_labels, image)
+    ellipse = ransac_ellipse(centroids_wo_labels)
 
     (xc, yc), (major, minor), angle = ellipse
     theta = np.deg2rad(angle)
@@ -350,7 +328,7 @@ def get_labels(angle, model, sample_in_operation_model):
 
     no_sample_width, no_sample_hight = get_no_sample_dimensions(boxes)
     centroids = get_holders_centroids(boxes, no_sample_width, no_sample_hight)
-    sorted_centroids = sort_centroids(np.array(centroids), image)
+    sorted_centroids = sort_centroids(np.array(centroids))
 
     # Expected location for sample in operation location
     expected_sample_in_operation_location = (1116, 1293)
@@ -362,37 +340,37 @@ def get_labels(angle, model, sample_in_operation_model):
     print(labels)
     return labels
 
-def main(model, sample_in_operation_model):
+def main(model, sample_in_operation_model, reference_angle):
     ACQUIRE_PV.put(1)
-    move_to_position(0)
+    move_to_position(reference_angle)
     reference_position = SAMPLE_CONTAINER_POS_PV.get()
 
-    labels = get_labels(0, model, sample_in_operation_model)
-    num_detections = len(labels)
-    if num_detections == 40:
+    labels = get_labels(reference_angle, model, sample_in_operation_model)
+    if len(labels) == 40:
         draw_sample_container(labels)
         return
 
-    angles = [90, 45]
-    for angle in angles:
+    angles = [90, 45, 135]
+    for angle_offset in angles:
+        angle = reference_angle + angle_offset
         other_labels = get_labels(angle, model, sample_in_operation_model)
-        num_detections = len(other_labels)
-        if num_detections == 40:
+        if len(other_labels) == 40:
             labels = other_labels
         else:
-            labels = combine_results(labels, other_labels)
-        num_detections = len(labels)
-        print(num_detections)
-        if num_detections == 40:
+            combined_labels = combine_results(labels, other_labels)
+            if combined_labels <= 40:
+                labels = combined_labels
+        if len(labels) == 40:
             break
-
-    if num_detections == 40:
+    if len(labels) == 40:
         draw_sample_container(labels)
+    else:
+        raise Exception(f"Could not find the 40 labels. Instead found {len(labels)}")
     move_to_position(reference_position)
 
 if __name__ == '__main__':
     model = YOLO("./yolo_model.pt")
     sample_in_operation_model = YOLO("./yolov8s.pt")
+    reference_angle = 0
     clean_working_dir()
-    main(model, sample_in_operation_model)
-
+    main(model, sample_in_operation_model, reference_angle)
