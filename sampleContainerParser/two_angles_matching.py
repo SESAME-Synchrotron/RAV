@@ -7,17 +7,12 @@ import numpy as np
 from time import sleep
 from ultralytics import YOLO
 from epics import PV
+from utils import capture_image, CAM_PREFIX, ACQUIRE_PV
 
 BLUE_COLOR = (255, 0, 0)
 GREEN_COLOR = (0, 255, 0)
 RED_COLOR = (0, 0, 255)
 
-CAM_PREFIX = "ID09EH-DCA-FLIR02:AI-CAM2-SIDE"
-ACQUIRE_PV = PV(CAM_PREFIX + ":Acquire")
-IMAGE_DATA_PV = PV(CAM_PREFIX.split(':')[0] + ":image1:ArrayData")
-SIZE_X_PV = PV(CAM_PREFIX + ":ArraySizeX_RBV")
-SIZE_Y_PV = PV(CAM_PREFIX + ":ArraySizeY_RBV")
-EXP_TIME_PV = PV(CAM_PREFIX + ":AcquireTime")
 SAMPLE_CONTAINER_POS_PV = PV("I09R2-MO-MC1:ES-DIFF-STP-ROTX1")
 SAMPLE_CONTAINER_DMOV_PV = PV("I09R2-MO-MC1:ES-DIFF-STP-ROTX1.DMOV")
 
@@ -32,12 +27,20 @@ def read_image(image_path):
     image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
     return image
 
-def sample_in_operation_model_simulation(image):
-    return None
+def get_sample_in_operation_location(sample_in_operation_model, image):
+    #result = sample_in_operation_model.predict(image, imgsz=1280)
+    #for res in result:
+    #    for box in res.boxes:
+    #        bounding_box = box.xyxy[0].tolist() # [x1, y1, x2, y2]
+    #        confidence = float(box.conf[0])
+    #        cls = float(box.cls[0])
+    #        label = res.names[cls]
+    #        print(label, confidence)
+    sample_in_operation_location = (1116, 1293)
+    return sample_in_operation_location
 
-def get_bounding_boxes(model, sample_in_operation_model, image):
+def get_bounding_boxes(model, image):
     result = model.predict(image, imgsz=1280)
-    sample_in_operation_result = sample_in_operation_model_simulation(image)#sample_in_operation_model.predict(image, imgsz=1280)
     boxes = []
     for res in result:
         for box in res.boxes:
@@ -51,13 +54,6 @@ def get_bounding_boxes(model, sample_in_operation_model, image):
                             "confidence": confidence,
                             "bbox": bounding_box
                         })
-    #for res in sample_in_operation_result:
-    #    for box in res.boxes:
-    #        bounding_box = box.xyxy[0].tolist() # [x1, y1, x2, y2]
-    #        confidence = float(box.conf[0])
-    #        cls = float(box.cls[0])
-    #        label = res.names[cls]
-    #        print(label, confidence)
     boxes = remove_fully_overlapped_boxes(boxes)
     boxes = remove_boxes_below_confidence_level(boxes, confidence_threshold=0.5)
     return boxes
@@ -268,22 +264,6 @@ def move_to_position(position):
     while not SAMPLE_CONTAINER_DMOV_PV.get():
         sleep(1)
 
-def capture_image(image_path):
-    timeout = 5
-    ACQUIRE_PV.put(0, wait=True) # stop acquiring
-    sleep(1)
-    EXP_TIME_PV.put(0.005, wait=True)
-    image_data = IMAGE_DATA_PV.get(timeout=timeout, use_monitor=False)
-    size_x = SIZE_X_PV.get(timeout=timeout, use_monitor=False)
-    size_y = SIZE_Y_PV.get(timeout=timeout, use_monitor=False)
-    image = np.reshape(image_data, (size_y, size_x))
-    image = np.flipud(image)
-    image = image.astype(np.uint8)
-    image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-    cv2.imwrite(image_path, image)
-    ACQUIRE_PV.put(1)
-    return image
-
 def draw_sample_container(labels):
     image = np.zeros((600, 600, 3), dtype=np.uint8)
     radius = 200
@@ -318,8 +298,8 @@ def clean_working_dir():
 
 def get_labels(angle, model, sample_in_operation_model):
     move_to_position(angle)
-    image = capture_image(f"./work/image_{angle}deg.jpg")
-    boxes = get_bounding_boxes(model, sample_in_operation_model, image)
+    image = capture_image(f"./work/image_{angle}deg.jpg", colored=True)
+    boxes = get_bounding_boxes(model, image)
     num_detections = len(boxes)
     print(f"number of detections at {angle} degree", num_detections)
     image_detections = image.copy()
@@ -330,10 +310,9 @@ def get_labels(angle, model, sample_in_operation_model):
     centroids = get_holders_centroids(boxes, no_sample_width, no_sample_hight)
     sorted_centroids = sort_centroids(np.array(centroids))
 
-    # Expected location for sample in operation location
-    expected_sample_in_operation_location = (1116, 1293)
-    cv2.circle(image, expected_sample_in_operation_location, radius=2, color=BLUE_COLOR, thickness=-1)
-    base_centroid_index = find_base_centroid(expected_sample_in_operation_location, sorted_centroids[:, :2].astype(float))
+    sample_in_operation_location = get_sample_in_operation_location(sample_in_operation_model, image)
+    cv2.circle(image, sample_in_operation_location, radius=2, color=BLUE_COLOR, thickness=-1)
+    base_centroid_index = find_base_centroid(sample_in_operation_location, sorted_centroids[:, :2].astype(float))
     based_centroids = get_based_centroids(sorted_centroids, base_centroid_index, angle)
     draw_ind_text(image, based_centroids)
     labels = based_centroids[:, 2]
@@ -358,7 +337,7 @@ def main(model, sample_in_operation_model, reference_angle):
             labels = other_labels
         else:
             combined_labels = combine_results(labels, other_labels)
-            if combined_labels <= 40:
+            if len(combined_labels) <= 40:
                 labels = combined_labels
         if len(labels) == 40:
             break

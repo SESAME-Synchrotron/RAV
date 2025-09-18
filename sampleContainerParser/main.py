@@ -123,7 +123,6 @@ def add_missing_boxes(boxes_0deg, centroids_0deg, centroids_90deg, no_sample_wid
     dist_matrix = cdist(centroids_90deg, centroids_0deg)  # shape: (len(centroids_90deg), len(centroids_0deg))
     min_indices = np.array(np.argmin(dist_matrix, axis=1))
     min_dist = dist_matrix.min(axis=1)
-    print(min_dist)
     missing_indices = np.where(min_dist > 10)[0]
     missing_centroids = [centroids_90deg[i] for i in missing_indices]
     for centroid in missing_centroids:
