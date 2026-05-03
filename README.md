@@ -28,3 +28,6 @@ It aims to enhance robotic sample exchange systems at SESAME's MS/XPD beamline b
 - **Operational Efficiency:** Reduced downtime and increased accuracy.
 - **Scalability:** Modular design adaptable for future upgrades and other robotic systems.
 - **User Empowerment:** Comprehensive training and intuitive interfaces for beamline staff.
+
+## Cite this work: 
+- https://doi.sesame.org.jo/10.82129/sesame-dc-9
